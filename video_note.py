@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 
 import config
-from subtitles import SpeechSegment, VideoInfo, build_ass
+from subtitles import SpeechSegment, VideoInfo, build_ass, group_words
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ def extract_audio(source: Path, destination: Path) -> None:
     _run([
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(source), "-map", "0:a:0", "-vn", "-ar", "16000", "-ac", "1",
-        "-c:a", "libopus", "-b:a", "32k", str(destination),
+        "-c:a", "libopus", "-b:a", "24k", "-threads", "1", str(destination),
     ])
 
 
@@ -98,11 +98,10 @@ async def transcribe_segments(audio_path: Path) -> list[SpeechSegment]:
                         headers={"Authorization": f"Bearer {config.GROQ_API_KEY}"},
                         files={"file": (audio_path.name, audio, "audio/ogg")},
                         data={
-                            "model": config.WHISPER_MODEL,
+                            "model": config.VIDEO_WHISPER_MODEL,
                             "language": "ru",
-                            "prompt": config.WHISPER_PROMPT,
                             "response_format": "verbose_json",
-                            "timestamp_granularities[]": "segment",
+                            "timestamp_granularities[]": ["segment", "word"],
                             "temperature": "0",
                         },
                     )
@@ -113,7 +112,14 @@ async def transcribe_segments(audio_path: Path) -> list[SpeechSegment]:
                     raise VideoProcessingError(
                         f"Groq отклонил запрос ({response.status_code}): {detail}"
                     )
-                return _parse_segments(response.json())
+                payload = response.json()
+                if payload.get("words"):
+                    return group_words(
+                        payload["words"],
+                        max_line_chars=config.SUBTITLE_MAX_CHARS_PER_LINE,
+                    )
+                # Старый/кастомный endpoint без word-таймингов: ничего не выдумываем.
+                return _parse_segments(payload)
             except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
                 last_error = exc
                 if attempt + 1 >= config.GROQ_RETRIES:
@@ -166,12 +172,15 @@ def build_ffmpeg_command(
     """Формирует команду для проверки аргументов без запуска FFmpeg."""
     side = min(info.width, info.height)
     side = max(2, side - side % 2)
-    audio_args = ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k"] if info.has_audio else ["-an"]
+    audio_args = ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "96k"] if info.has_audio else ["-an"]
+    performance_args = [
+        "-threads", str(config.VIDEO_THREADS), "-filter_threads", "1",
+    ]
     common = [
         *audio_args,
         "-c:v", "libx264", "-preset", config.VIDEO_PRESET,
         "-crf", str(config.VIDEO_CRF), "-pix_fmt", "yuv420p",
-        "-profile:v", "high", "-level", "4.0",
+        *performance_args,
         "-movflags", "+faststart", "-t", f"{info.duration:.3f}",
         str(destination),
     ]
@@ -179,7 +188,7 @@ def build_ffmpeg_command(
         return [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-i", str(source), "-map", "0:v:0",
-            "-vf", f"subtitles=subtitles.ass,scale={side}:{side}:flags=lanczos",
+            "-vf", "subtitles=subtitles.ass",
             *common,
         ]
     # Весь неквадратный исходный кадр сохраняется поверх размытого фона.
