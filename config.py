@@ -7,11 +7,11 @@ load_dotenv()
 BOT_TOKEN: str = os.environ["BOT_TOKEN"]
 GROQ_API_KEY: str = os.environ["GROQ_API_KEY"]
 
-# Groq Whisper model
-WHISPER_MODEL: str = "whisper-large-v3-turbo"
+# Полная v3 точнее turbo, а длинные фрагменты сокращают число API-запросов.
+WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "whisper-large-v3")
 
-# Audio chunking settings (the original voice-message pipeline)
-CHUNK_SECONDS: int = 5
+# Длинные фрагменты не разрывают слова каждые пять секунд и дают модели контекст.
+CHUNK_SECONDS: int = max(5, int(os.getenv("CHUNK_SECONDS", "30")))
 LONG_AUDIO_THRESHOLD: int = 180
 LONG_AUDIO_BLOCK_SECONDS: int = 60
 
@@ -19,8 +19,11 @@ LONG_AUDIO_BLOCK_SECONDS: int = 60
 MIN_EDIT_INTERVAL: float = 1.5
 
 WHISPER_PROMPT: str = (
-    "Привет! Расставь, пожалуйста, правильные знаки препинания, "
-    "заглавные буквы и оформи текст грамотно."
+    "Это естественная русская устная речь. Точно передавай все слова, имена и числа. "
+    "Используй грамотную русскую пунктуацию: запятые, тире, вопросительные и "
+    "восклицательные знаки. Начинай предложения с заглавной буквы и завершай их точкой. "
+    "Не добавляй пояснений и не изменяй смысл. Например: Привет, как дела? "
+    "Я сегодня задержусь, поэтому давай встретимся завтра."
 )
 
 TG_MESSAGE_LIMIT: int = 4096

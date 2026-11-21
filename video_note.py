@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 
 import config
+from punctuation import restore_punctuation
 from subtitles import SpeechSegment, VideoInfo, build_ass, group_words
 
 logger = logging.getLogger(__name__)
@@ -99,8 +100,9 @@ async def transcribe_segments(audio_path: Path) -> list[SpeechSegment]:
                         files={"file": (audio_path.name, audio, "audio/ogg")},
                         data={
                             "model": config.VIDEO_WHISPER_MODEL,
-                            "language": "ru",
                             "response_format": "verbose_json",
+                            "language": "ru",
+                            "prompt": config.WHISPER_PROMPT,
                             "timestamp_granularities[]": ["segment", "word"],
                             "temperature": "0",
                         },
@@ -153,7 +155,7 @@ def _parse_segments(payload: dict) -> list[SpeechSegment]:
             raise VideoProcessingError("Некорректный сегмент в ответе Groq.")
         start = float(item["start"])
         end = float(item["end"])
-        text = str(item.get("text", "")).strip()
+        text = restore_punctuation(str(item.get("text", "")), ensure_final=True)
         if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end < start:
             raise VideoProcessingError("Groq вернул некорректные временные метки.")
         # Не выдумываем метки, лишь исключаем редкое перекрытие ответа API.

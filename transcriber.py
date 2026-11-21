@@ -23,6 +23,7 @@ from typing import Optional
 import httpx
 
 import config
+from punctuation import restore_punctuation
 
 logger = logging.getLogger(__name__)
 
@@ -102,9 +103,9 @@ async def transcribe_chunk(
     """
     prompt = config.WHISPER_PROMPT
     if previous_text:
-        # Передаём последние ~224 токена предыдущего текста как контекст
+        # Сохраняем инструкцию по пунктуации и добавляем контекст предыдущей фразы.
         context_snippet = previous_text[-500:]
-        prompt = context_snippet
+        prompt = f"{prompt}\nПредыдущий текст: {context_snippet}"
 
     with open(chunk_path, "rb") as f:
         audio_bytes = f.read()
@@ -122,13 +123,13 @@ async def transcribe_chunk(
             "language": "ru",
             "prompt": prompt,
             "response_format": "text",
+            "temperature": "0",
         },
-        timeout=60.0,
+        timeout=config.GROQ_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
 
-    text: str = response.text.strip()
-    return text
+    return restore_punctuation(response.text)
 
 
 # ---------------------------------------------------------------------------
@@ -142,8 +143,8 @@ async def transcribe_audio(
     """
     Асинхронный генератор, который:
     1. Извлекает аудио из source_path (если видео — снимает видеодорожку).
-    2. Нарезает аудио на 5-секундные чанки.
-       Для файлов длиннее 3 минут — сначала минутные блоки, потом 5-сек чанки.
+    2. Короткое аудио отправляет целиком, длинное нарезает на длинные чанки.
+       Для файлов длиннее 3 минут используются промежуточные минутные блоки.
     3. Для каждого чанка вызывает Groq API и yield-ит распознанный текст.
 
     Временные файлы всегда удаляются в блоке finally.
@@ -168,8 +169,13 @@ async def transcribe_audio(
 
             accumulated_text = ""
 
-            if duration <= long_threshold:
-                # --- Короткий файл: нарезаем сразу по 5 сек ---
+            if duration <= chunk_sec:
+                # Один запрос без стыков: быстрее и заметно точнее для короткой речи.
+                new_text = await transcribe_chunk(client, audio_path)
+                if new_text:
+                    yield new_text
+            elif duration <= long_threshold:
+                # Сохраняем постепенный вывод, но не разрываем речь каждые 5 секунд.
                 async for piece in _yield_chunks(
                     client, audio_path, 0.0, duration, chunk_sec,
                     tmpdir, created_files, accumulated_text

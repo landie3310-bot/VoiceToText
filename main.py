@@ -21,6 +21,7 @@ from aiohttp import web
 
 import config
 import transcriber
+from punctuation import restore_punctuation
 from video_note import VideoProcessingError, process_video_note
 
 logging.basicConfig(
@@ -97,7 +98,17 @@ async def _process_voice(message: Message, bot: Bot) -> None:
             )
             first_piece = False
             last_edit_time = asyncio.get_running_loop().time()
-        if not full_text:
+        if full_text:
+            punctuated_text = restore_punctuation(full_text, ensure_final=True)
+            if punctuated_text != full_text:
+                await _safe_edit_or_send(
+                    bot=bot,
+                    chat_id=message.chat.id,
+                    current_msg=current_msg,
+                    text=punctuated_text,
+                    first_piece=False,
+                )
+        else:
             await current_msg.edit_text("Речь не обнаружена.")
     except Exception as exc:
         logger.exception("Ошибка обработки голосового: %s", exc)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from punctuation import restore_punctuation
+
 
 @dataclass(frozen=True)
 class SpeechSegment:
@@ -91,6 +93,7 @@ def group_words(
     result: list[SpeechSegment] = []
     for group in groups:
         text = " ".join(str(item["word"]).strip() for item in group).strip()
+        text = restore_punctuation(text, ensure_final=True)
         result.append(SpeechSegment(
             start=float(group[0]["start"]),
             end=float(group[-1]["end"]),
