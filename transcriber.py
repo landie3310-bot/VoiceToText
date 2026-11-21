@@ -142,9 +142,9 @@ async def transcribe_audio(
 ) -> AsyncIterator[str]:
     """
     Асинхронный генератор, который:
-    1. Извлекает аудио из source_path (если видео — снимает видеодорожку).
-    2. Короткое аудио отправляет целиком, длинное нарезает на длинные чанки.
-       Для файлов длиннее 3 минут используются промежуточные минутные блоки.
+    1. Обычные голосовые Telegram отправляет напрямую, без FFmpeg.
+    2. Файлы до лимита Groq распознаёт одним запросом; только большие нарезает.
+       Для больших файлов длиннее 3 минут используются минутные блоки.
     3. Для каждого чанка вызывает Groq API и yield-ит распознанный текст.
 
     Временные файлы всегда удаляются в блоке finally.
@@ -154,27 +154,41 @@ async def transcribe_audio(
 
     async with httpx.AsyncClient() as client:
         try:
-            # --- Шаг 1: извлечь/конвертировать аудио ---
+            # Telegram уже отдаёт голосовые в OGG/Opus. Не тратим время на
+            # повторную конвертацию: исходный файл напрямую уходит в тот же Groq.
+            if not is_video and os.path.getsize(source_path) <= config.GROQ_MAX_FILE_BYTES:
+                new_text = await transcribe_chunk(client, source_path)
+                if new_text:
+                    yield new_text
+                return
+
+            # Конвертация нужна видео и слишком большим исходным файлам.
             audio_path = os.path.join(tmpdir, f"{uuid.uuid4().hex}_audio.ogg")
             created_files.append(audio_path)
 
             await asyncio.to_thread(extract_audio, source_path, audio_path)
 
-            duration = await asyncio.to_thread(get_duration, audio_path)
-            logger.info("Длительность аудио: %.1f сек", duration)
-
-            chunk_sec = config.CHUNK_SECONDS
-            block_sec = config.LONG_AUDIO_BLOCK_SECONDS
-            long_threshold = config.LONG_AUDIO_THRESHOLD
-
-            accumulated_text = ""
-
-            if duration <= chunk_sec:
-                # Один запрос без стыков: быстрее и заметно точнее для короткой речи.
+            audio_size = os.path.getsize(audio_path)
+            if audio_size <= config.GROQ_MAX_FILE_BYTES:
+                # Даже ffprobe здесь не нужен: одна конвертация и один API-запрос.
+                logger.info(
+                    "Распознавание одним запросом (%.1f МиБ)",
+                    audio_size / (1024 * 1024),
+                )
                 new_text = await transcribe_chunk(client, audio_path)
                 if new_text:
                     yield new_text
-            elif duration <= long_threshold:
+                return
+
+            # Нарезка нужна только исключительно большим файлам свыше лимита Groq.
+            duration = await asyncio.to_thread(get_duration, audio_path)
+            logger.info("Длительность аудио: %.1f сек", duration)
+            chunk_sec = config.CHUNK_SECONDS
+            block_sec = config.LONG_AUDIO_BLOCK_SECONDS
+            long_threshold = config.LONG_AUDIO_THRESHOLD
+            accumulated_text = ""
+
+            if duration <= long_threshold:
                 # Сохраняем постепенный вывод, но не разрываем речь каждые 5 секунд.
                 async for piece in _yield_chunks(
                     client, audio_path, 0.0, duration, chunk_sec,

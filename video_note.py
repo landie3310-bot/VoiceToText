@@ -97,7 +97,13 @@ async def transcribe_segments(audio_path: Path) -> list[SpeechSegment]:
                     response = await client.post(
                         "https://api.groq.com/openai/v1/audio/transcriptions",
                         headers={"Authorization": f"Bearer {config.GROQ_API_KEY}"},
-                        files={"file": (audio_path.name, audio, "audio/ogg")},
+                        files={
+                            "file": (
+                                audio_path.name,
+                                audio,
+                                "video/mp4" if audio_path.suffix.lower() == ".mp4" else "audio/ogg",
+                            )
+                        },
                         data={
                             "model": config.VIDEO_WHISPER_MODEL,
                             "response_format": "verbose_json",
@@ -244,9 +250,9 @@ async def process_video_note(source: Path, workdir: Path) -> tuple[Path, VideoIn
         )
     if not info.has_audio:
         return source, info, source
-    audio = workdir / "audio.ogg"
-    await asyncio.to_thread(extract_audio, source, audio)
-    segments = await transcribe_segments(audio)
+    # Groq сам извлекает звук из MP4: исходная дорожка не пережимается,
+    # а локальный этап FFmpeg полностью исчезает из ожидания пользователя.
+    segments = await transcribe_segments(source)
     if not segments:
         return source, info, source
     output = workdir / "result.mp4"

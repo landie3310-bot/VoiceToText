@@ -12,6 +12,8 @@ WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "whisper-large-v3")
 
 # Длинные фрагменты не разрывают слова каждые пять секунд и дают модели контекст.
 CHUNK_SECONDS: int = max(5, int(os.getenv("CHUNK_SECONDS", "30")))
+# Запас в 1 МиБ от официального лимита 25 МБ. Обычные записи идут одним запросом.
+GROQ_MAX_FILE_BYTES: int = 24 * 1024 * 1024
 LONG_AUDIO_THRESHOLD: int = 180
 LONG_AUDIO_BLOCK_SECONDS: int = 60
 
